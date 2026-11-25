@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.1
+- 预览面板：当选中的导入会话在客户端会话列表里缺 `cwd` 时给出黄色提示（内置「Workspace files」会因此打不开，刷新页面可恢复）
+
 ## 0.6.0
 - 项目级批量导入（`/api/foreign/import-project` 后台任务 + 进度轮询）
 - 项目维护接口：`/workspaces`、`/workspace/rename`、`/workspace/attach`、`/workspace/delete`

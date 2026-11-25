@@ -968,6 +968,20 @@ export function apply(ctx, config = {}) {
           return send(res, 200, { ok: true })
         }
 
+        if (req.method === 'GET' && path === '/debug/session') {
+          const id = url.searchParams.get('id')
+          if (!id) return send(res, 400, { error: 'id required' })
+          const out = { id }
+          try { const live = ctx.sessions.get?.(id); out.live = !!live; out.liveCwd = live?.header?.cwd } catch (e) { out.liveError = String(e?.message) }
+          try {
+            const st = await ctx.sessionPersistence?.stat?.(id)
+            out.hasStat = !!st
+            out.storedCwd = st?.header?.cwd
+            out.header = st?.header
+          } catch (e) { out.statError = String(e?.message || e) }
+          return send(res, 200, out)
+        }
+
         if (req.method === 'GET' && path === '/workspaces') {
           if (!wsRegistry?.list) return send(res, 200, { workspaces: [], note: 'workspaceRegistry 不可用' })
           const list = await wsRegistry.list()
