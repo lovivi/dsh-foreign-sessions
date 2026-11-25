@@ -1,5 +1,10 @@
 # dsh-foreign-sessions
 
+在 DSH 内发现本机其他 Agent（Kimi Code / Claude Code / Codex）的项目与会话，选中后导入为 DSH 原生会话。
+
+- 仓库：https://github.com/lovivi/dsh-foreign-sessions
+- 发布：https://github.com/lovivi/dsh-foreign-sessions/releases
+
 在 DSH 里发现本机其他 Agent 的会话（**Kimi Code / Claude Code / Codex CLI**），按「项目(cwd) → 会话」浏览，选中后**导入成 DSH 会话**。
 
 - Host 半端：`index.js` —— 三个适配器 + 发现 / 读取 / 导入（走 DSH 官方 `ctx.sessions`，不手写日志）
