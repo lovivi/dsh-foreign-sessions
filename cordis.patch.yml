@@ -1,0 +1,9 @@
+# dsh-foreign-sessions 的挂载声明
+- insert:
+    - id: foreign-sessions
+      name: dsh-foreign-sessions
+      config:
+        adapters:
+          - kimi-code
+          - claude-code
+          - codex

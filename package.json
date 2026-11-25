@@ -1,0 +1,65 @@
+{
+  "name": "dsh-foreign-sessions",
+  "version": "0.6.0",
+  "private": false,
+  "description": "Discover sessions from other local agents (Kimi Code / Claude Code / Codex) inside DSH, and import them as native DSH sessions.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "locale",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "kimi-code",
+    "claude-code",
+    "codex",
+    "session",
+    "import",
+    "migration"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2",
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "author": {
+    "name": "Song Jie",
+    "email": "q2516581@126.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lovivi/dsh-foreign-sessions.git"
+  },
+  "homepage": "https://github.com/lovivi/dsh-foreign-sessions#readme",
+  "bugs": {
+    "url": "https://github.com/lovivi/dsh-foreign-sessions/issues"
+  }
+}

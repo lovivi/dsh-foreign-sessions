@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "外部会话导入",
+    "description": "在 DSH 内发现本机其他 Agent（Kimi Code / Claude Code / Codex）的项目与会话，选中后导入为 DSH 原生会话。"
+  }
+}
