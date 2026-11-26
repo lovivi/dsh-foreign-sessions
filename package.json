@@ -1,6 +1,6 @@
 {
   "name": "dsh-foreign-sessions",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": false,
   "description": "Discover sessions from other local agents (Kimi Code / Claude Code / Codex) inside DSH, and import them as native DSH sessions.",
   "license": "MIT",
