@@ -1,6 +1,6 @@
 {
   "name": "dsh-foreign-sessions",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": false,
   "description": "Discover sessions from other local agents (Kimi Code / Claude Code / Codex) inside DSH, and import them as native DSH sessions.",
   "license": "MIT",
@@ -14,14 +14,15 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "cordis.patch.yml",
+    "icon.svg",
     "index.js",
     "lib/client.js",
-    "cordis.patch.yml",
     "locale",
-    "icon.svg",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
+    "tools/repair-system-head.mjs"
   ],
   "keywords": [
     "dsh",

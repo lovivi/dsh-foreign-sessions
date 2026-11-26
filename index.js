@@ -10,11 +10,12 @@
  */
 
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import { createReadStream } from 'node:fs'
+import { createReadStream, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
+import { zstdDecompressSync } from 'node:zlib'
 
 export const name = 'foreign-sessions'
 export const inject = ['webServer', 'sessions', 'sessionPersistence']
@@ -557,10 +558,20 @@ export async function importSession(ctx, { agent, id, targetCwd, lastN = 0, titl
   let events = 0
   let firstUserSeq = null
 
+  const head = (await loadSystemHead().catch(() => null)) || {
+    message: { role: 'system', content: [{ type: 'text', text: 'You are an AI agent powered by DeepSeek Harness.' }] },
+  }
+  let headWritten = false
+
   for (const t of all) {
     const n = t.n
     session.append('turn/start', { turn: n }); events++
     session.append('step/start', { turn: n, step: 1 }); events++
+    if (!headWritten && head?.message) {
+      // 受保护 surface 头：必须是日志里第一个 surface 事件
+      session.append('system/message', { turn: n, step: 1, message: head.message }, { surfaceOp: 'append' }); events++
+      headWritten = true
+    }
     const ue = session.append('user/message', {
       role: 'user',
       content: [{ type: 'text', text: t.user }],
@@ -713,6 +724,61 @@ function normalizeCwdSafe(p) {
 
 const AUTO_DIR = join(homedir(), '.dsh', 'foreign-sessions')
 const MANUAL_FILE = join(AUTO_DIR, 'imported-manual.json')
+const SYSTEM_HEAD_FILE = join(AUTO_DIR, 'system-head.json')
+
+let systemHeadCache = null
+
+/** 从一份已落盘的会话里取第一条 system/message 的 message（作为导入会话的受保护 surface 头）。 */
+function readSystemMessageFrom(file) {
+  try {
+    const raw = readFileSync(file)
+    const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
+    const parts = []
+    let pos = 0
+    while (true) {
+      const i = raw.indexOf(MAGIC, pos)
+      if (i < 0) break
+      const j = i + 4 < raw.length ? raw.indexOf(MAGIC, i + 4) : -1
+      parts.push(zstdDecompressSync(raw.subarray(i, j < 0 ? raw.length : j)).toString('utf8'))
+      pos = j < 0 ? raw.length : j
+    }
+    for (const line of parts.join('').split('\n')) {
+      if (!line.trim()) continue
+      let row
+      try { row = JSON.parse(line) } catch { continue }
+      if (row.type === 'system/message' && row.data?.message?.role === 'system') return row.data.message
+    }
+  } catch { /* 读不了就跳过 */ }
+  return null
+}
+
+/**
+ * 导入会话必须带一个「受保护的 system/message surface 头」：
+ * 否则之后 agent 恢复时会把它追加在中间，导致 v4 关系校验失败、会话打不开。
+ * 模板取自本机任意正常会话（同一 profile 的系统提示词），并缓存下来。
+ */
+async function loadSystemHead() {
+  if (systemHeadCache) return systemHeadCache
+  const cached = await readJsonFile(SYSTEM_HEAD_FILE, null).catch(() => null)
+  if (cached?.message) { systemHeadCache = cached; return cached }
+  const root = join(homedir(), '.dsh', 'sessions')
+  const dirs = await readdir(root, { withFileTypes: true }).catch(() => [])
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue
+    const proj = join(root, d.name)
+    const entries = await readdir(proj, { withFileTypes: true }).catch(() => [])
+    for (const e of entries) {
+      if (!e.isDirectory() || !e.name.startsWith('session-')) continue
+      const msg = readSystemMessageFrom(join(proj, e.name, 'session.v4.jsonl.zstd'))
+      if (msg) {
+        systemHeadCache = { message: msg, from: join(proj, e.name) }
+        await writeJsonFile(SYSTEM_HEAD_FILE, systemHeadCache).catch(() => {})
+        return systemHeadCache
+      }
+    }
+  }
+  return null
+}
 
 async function findExistingImport(agent, id) {
   const map = await readJsonFile(MANUAL_FILE, {})
@@ -966,6 +1032,26 @@ export function apply(ctx, config = {}) {
           else if (typeof target.delete === 'function') await target.delete()
           else return send(res, 501, { error: '没有可用的删除方法' })
           return send(res, 200, { ok: true })
+        }
+
+        if (req.method === 'GET' && path === '/debug/read') {
+          const id = url.searchParams.get('id')
+          if (!id) return send(res, 400, { error: 'id required' })
+          try {
+            const h = await ctx.sessionPersistence.open(id, 'read')
+            const out = await h.read(0, 5)
+            const last = await h.read(Math.max(0, (out.eventState?.nextSeq ?? 1) - 3), 3).catch(() => null)
+            await h.close?.()
+            return send(res, 200, {
+              ok: true,
+              events: Array.isArray(out.events) ? out.events.length : null,
+              first: out.events?.slice(0, 3).map((e) => e.type),
+              tail: last?.events?.map((e) => e.type) ?? null,
+              nextSeq: out.eventState?.nextSeq ?? null,
+            })
+          } catch (e) {
+            return send(res, 500, { ok: false, error: String(e?.message || e), name: e?.name })
+          }
         }
 
         if (req.method === 'GET' && path === '/debug/session') {
