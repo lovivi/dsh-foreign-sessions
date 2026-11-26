@@ -774,6 +774,18 @@ export async function importSession(ctx, { agent, id, targetCwd, lastN = 0, titl
   } catch (e) {
     log('flush 失败:', e?.message)
   }
+  // 导入完成后把「已发布但无 agent」的会话从 sessions store 摘掉：
+  // 否则客户端打开这条会话时 resume 会撞上 "session already exists"，发送消息直接失败。
+  try {
+    const entry = ctx.sessions.liveEntryFor?.(session)
+    if (entry && ctx.sessions.detachEntered) {
+      ctx.sessions.detachEntered(entry)
+      log('session 已从 store 摘除（等待首次打开时再 resume）:', sessionId)
+    }
+  } catch (e) {
+    log('detach 跳过:', e?.message)
+  }
+
   if (workspace?.attachSession) {
     try { await workspace.attachSession(sessionId) } catch (e) { log('attachSession 跳过:', e?.message) }
   }
@@ -1200,6 +1212,119 @@ export function apply(ctx, config = {}) {
           return send(res, 200, { warming: true, cached: searchCache.size })
         }
 
+        if (req.method === 'GET' && path === '/debug/agent') {
+          const id = url.searchParams.get('id')
+          if (!id) return send(res, 400, { error: 'id required' })
+          const out = { id }
+          try {
+            const live = ctx.sessions.get?.(id)
+            out.sessionKeys = live ? Object.keys(live) : null
+            out.lastSeq = live?.lastSeq ?? live?.seq ?? null
+          } catch (e) { out.sessionError = String(e?.message) }
+          try {
+            const agents = ctx.get?.('agents')
+            out.hasAgents = !!agents
+            try {
+              const proto = agents ? Object.getPrototypeOf(agents) : null
+              out.agentMethods = proto ? Object.getOwnPropertyNames(proto).filter((k) => k !== 'constructor') : null
+            } catch {}
+            const agent = agents?.get?.(id)
+            out.hasAgent = !!agent
+            if (agent) {
+              out.agentKeys = Object.keys(agent).slice(0, 40)
+              for (const k of ['status', 'state', 'phase', 'error', 'failure', 'lastError', 'busy', 'running', 'turn', 'disposed']) {
+                try { const v = agent[k]; if (v !== undefined && typeof v !== 'function') out[k] = (typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : v) } catch {}
+              }
+            }
+          } catch (e) { out.agentError = String(e?.message) }
+          return send(res, 200, out)
+        }
+
+        if (req.method === 'GET' && path === '/debug/resume2') {
+          const id = url.searchParams.get('id')
+          const agents = ctx.get?.('agents')
+          if (!agents?.resume) return send(res, 503, { error: 'agents.resume 不可用' })
+          try {
+            const r = await agents.resume({ resumeSessionId: id })
+            return send(res, 200, { ok: true, agent: !!r?.agent, keys: r ? Object.keys(r) : null })
+          } catch (e) {
+            return send(res, 500, { ok: false, name: e?.name, error: String(e?.message || e), code: e?.code })
+          }
+        }
+
+        if (req.method === 'GET' && path === '/debug/prompt') {
+          const id = url.searchParams.get('id')
+          const agents = ctx.get?.('agents')
+          if (!agents?.resume) return send(res, 503, { error: 'agents.resume 不可用' })
+          const out = { id, steps: [] }
+          try {
+            let agent = agents.get?.(id)
+            if (!agent) {
+              const r = await agents.resume({ resumeSessionId: id })
+              agent = r?.agent ?? r
+              out.steps.push('resumed')
+            } else out.steps.push('already-live')
+            const msg = { role: 'user', content: [{ type: 'text', text: 'debug ping' }], source: { kind: 'user' }, id: `dbg-${Date.now()}` }
+            try { agent.followup(msg); out.steps.push('followup-ok') } catch (e) { out.steps.push('followup-fail'); out.followupError = { name: e?.name, message: String(e?.message), code: e?.code } }
+            return send(res, 200, out)
+          } catch (e) {
+            out.steps.push('resume-fail')
+            out.resumeError = { name: e?.name, message: String(e?.message), code: e?.code }
+            return send(res, 200, out)
+          }
+        }
+
+        if (req.method === 'GET' && path === '/debug/observe') {
+          const id = url.searchParams.get('id')
+          const sq = ctx.get?.('sessionQuery')
+          if (!sq?.observeSession) return send(res, 503, { error: 'sessionQuery 不可用' })
+          try {
+            const ob = await sq.observeSession(id)
+            const h = ob?.header
+            const ev = ob?.snapshotEvents?.() ?? ob?.events ?? null
+            let n = null
+            try { n = Array.isArray(ev) ? ev.length : (typeof ob?.lastSeq === 'number' ? ob.lastSeq : null) } catch {}
+            return send(res, 200, { ok: true, id: h?.id, cwd: h?.cwd, events: n })
+          } catch (e) {
+            return send(res, 500, { ok: false, name: e?.name, error: String(e?.message || e), code: e?.code })
+          }
+        }
+
+        if (req.method === 'GET' && path === '/debug/list') {
+          const sq = ctx.get?.('sessionQuery')
+          if (!sq?.listSessions) return send(res, 503, { error: 'sessionQuery.listSessions 不可用' })
+          try {
+            const rows = await sq.listSessions()
+            const arr = Array.isArray(rows) ? rows : [...(rows || [])]
+            return send(res, 200, {
+              ok: true,
+              count: arr.length,
+              hasAmd: arr.some((r) => String(r?.id || r?.sessionId || '').includes('1ce90976')),
+              hasUkb: arr.some((r) => String(r?.id || r?.sessionId || '').includes('fa1212d7')),
+              sample: arr.slice(0, 3).map((r) => ({ id: r?.id || r?.sessionId, cwd: r?.cwd || r?.header?.cwd })),
+              raw0: arr[0] || null,
+              rawKeys: arr[0] ? Object.keys(arr[0]) : null,
+              amdRow: arr.find((r) => JSON.stringify(r).includes('1ce90976')) || null,
+              normalRow: arr.find((r) => JSON.stringify(r).includes('19b2ada6')) || null,
+            })
+          } catch (e) {
+            return send(res, 500, { ok: false, name: e?.name, error: String(e?.message || e) })
+          }
+        }
+
+        if (req.method === 'GET' && path === '/debug/resume') {
+          const id = url.searchParams.get('id')
+          if (!id) return send(res, 400, { error: 'id required' })
+          const agents = ctx.get?.('agents')
+          if (!agents?.resume) return send(res, 503, { error: 'agents.resume 不可用' })
+          try {
+            const r = await agents.resume(id)
+            return send(res, 200, { ok: true, result: typeof r === 'object' ? Object.keys(r || {}) : String(r) })
+          } catch (e) {
+            return send(res, 500, { ok: false, name: e?.name, error: String(e?.message || e), code: e?.code, data: e?.data })
+          }
+        }
+
         if (req.method === 'GET' && path === '/debug/read') {
           const id = url.searchParams.get('id')
           if (!id) return send(res, 400, { error: 'id required' })
@@ -1218,6 +1343,38 @@ export function apply(ctx, config = {}) {
           } catch (e) {
             return send(res, 500, { ok: false, error: String(e?.message || e), name: e?.name })
           }
+        }
+
+        if (req.method === 'POST' && path === '/debug/detach') {
+          const body = await readBody(req)
+          const ids = Array.isArray(body?.ids) ? body.ids : [body?.id]
+          const out = []
+          for (const id of ids.filter(Boolean)) {
+            try {
+              const session = ctx.sessions.get?.(id)
+              const agent = ctx.get?.('agents')?.get?.(id)
+              if (!session) { out.push({ id, detached: false, reason: 'not-live' }); continue }
+              if (agent) { out.push({ id, detached: false, reason: 'agent-attached' }); continue }
+              const entry = ctx.sessions.liveEntryFor?.(session)
+              if (!entry) { out.push({ id, detached: false, reason: 'no-entry' }); continue }
+              ctx.sessions.detachEntered(entry)
+              out.push({ id, detached: true })
+            } catch (e) { out.push({ id, detached: false, reason: String(e?.message) }) }
+          }
+          return send(res, 200, { ok: true, results: out })
+        }
+
+        if (req.method === 'GET' && path === '/debug/methods') {
+          const name = url.searchParams.get('name') || 'sessions'
+          const svc = name === 'sessions' ? ctx.sessions : ctx.get?.(name)
+          const out = { name, has: !!svc, methods: null, own: null }
+          try {
+            if (svc) {
+              out.methods = Object.getOwnPropertyNames(Object.getPrototypeOf(svc)).filter((k) => k !== 'constructor')
+              out.own = Object.keys(svc)
+            }
+          } catch (e) { out.error = String(e?.message) }
+          return send(res, 200, out)
         }
 
         if (req.method === 'GET' && path === '/debug/session') {
