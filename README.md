@@ -13,17 +13,26 @@
 
 ## 安装
 
-**推荐：Web 面板安装**（会自动 link 进 profile 并加入 `dsh.profile.bundles` + HMR）
+**推荐：从 GitHub Release 安装**（稳定链接始终指向最新版）
 
-1. 打开 DSH Web → 设置 → 插件 → 添加插件
-2. 填**本地绝对目录**：`/home/song/work/dshtest/dsh_foreign_sessions`
-3. 启用后刷新页面，左侧栏出现「外部会话」图标（⤓）
+```bash
+dsh plugin --profile web add https://github.com/lovivi/dsh-foreign-sessions/releases/latest/download/dsh-foreign-sessions.tgz
+```
 
-**CLI 方式**（只装依赖，还要手动选包）：
+或在 Web「设置 → 插件 → 添加插件」里填同一个 URL（会自动 link 进 profile、加入 `dsh.profile.bundles`、HMR 生效）。
+
+锁版本：`…/releases/download/v0.6.1/dsh-foreign-sessions-0.6.1.tgz`。
+
+**从 git 安装**
+
+```bash
+dsh plugin --profile web add git+https://github.com/lovivi/dsh-foreign-sessions.git
+```
+
+**本地开发**
 
 ```bash
 dsh plugin --profile web add /home/song/work/dshtest/dsh_foreign_sessions
-# 然后把 "dsh-foreign-sessions" 加进 ~/.dsh/profiles/web/package.json 的 dsh.profile.bundles
 ```
 
 安装/启用是 profile 级操作，会触发一次审批；失败信息在「设置 → 插件 → 插件列表」。
