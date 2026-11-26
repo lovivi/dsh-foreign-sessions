@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+- 新增**内容搜索**：勾选「搜内容」后在会话正文里检索，命中显示轮次与上下文片段，点结果直接预览/导入
+- 搜索索引内存 + 磁盘缓存（`~/.dsh/foreign-sessions/search-cache.json`），重启后秒搜；全量 371 会话约 0.3s
+- 修复：`fmtTime` 时间格式（去掉多余冒号）
+- 加 `npm run check`（模块可加载）+ `npm test`
+
 ## 0.6.2
 - **修复导入会话打不开**：导入时写入受保护的 `system/message` surface 头（v4 格式要求），避免恢复后日志非法
 - 新增 `tools/repair-system-head.mjs`：修复历史坏会话（插入系统头 + 重编号 + 正确帧布局 + 官方校验）

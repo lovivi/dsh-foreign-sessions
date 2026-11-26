@@ -483,6 +483,158 @@ const codexAdapter = {
 
 export const adapters = { 'kimi-code': kimiAdapter, 'claude-code': claudeAdapter, codex: codexAdapter }
 
+// ---------------------------------------------------------------- 全文搜索（标题之外，搜对话内容）
+//
+// 索引懒加载：第一次搜索时把各会话解析成 turns 缓存（按 mtime/size 失效），
+// 之后同一进程内搜索是纯内存扫描；有超时预算，超时返回已扫描到的部分。
+
+const searchCache = new Map()
+const SEARCH_CACHE_FILE = join(homedir(), '.dsh', 'foreign-sessions', 'search-cache.json')
+let warmPromise = null
+let saveTimer = null
+
+async function loadSearchCacheFromDisk() {
+  const d = await readJsonFile(SEARCH_CACHE_FILE, null).catch(() => null)
+  if (!d?.docs || !Array.isArray(d.docs)) return 0
+  for (const doc of d.docs) {
+    if (doc?.key && Array.isArray(doc.turns)) searchCache.set(doc.key, doc)
+  }
+  return searchCache.size
+}
+
+function scheduleSaveSearchCache() {
+  if (saveTimer) return
+  saveTimer = setTimeout(async () => {
+    saveTimer = null
+    try {
+      await writeJsonFile(SEARCH_CACHE_FILE, { savedAt: Date.now(), docs: [...searchCache.values()] })
+    } catch (e) {
+      log('search-cache 写入失败:', e?.message)
+    }
+  }, 4000)
+  saveTimer.unref?.()
+}
+
+function searchKey(row) {
+  return `${row.agent}:${row.id}`
+}
+
+async function loadSearchDoc(row) {
+  const key = searchKey(row)
+  const hit = searchCache.get(key)
+  if (hit && hit.mtime === row.updatedAt && hit.size === row.size) return hit
+  const adapter = adapters[row.agent]
+  if (!adapter) return null
+  const turns = await adapter.turns(row.id, 0)
+  const doc = {
+    key,
+    agent: row.agent,
+    id: row.id,
+    title: row.title,
+    cwd: row.cwd,
+    kind: row.kind,
+    origin: row.origin,
+    parentId: row.parentId || null,
+    updatedAt: row.updatedAt,
+    size: row.size,
+    mtime: row.updatedAt,
+    hash: row.size,
+    turns,
+  }
+  searchCache.set(key, doc)
+  return doc
+}
+
+export async function warmSearchIndex(limitAgents = ['kimi-code', 'claude-code', 'codex']) {
+  if (warmPromise) return warmPromise
+  warmPromise = (async () => {
+    for (const id of limitAgents) {
+      const a = adapters[id]
+      if (!a) continue
+      if (!(await a.detect().catch(() => false))) continue
+      let rows = []
+      try { rows = await a.list() } catch { continue }
+      const queue = rows.filter((r) => r.kind !== 'sub')
+      let i = 0
+      const worker = async () => {
+        while (i < queue.length) {
+          const row = queue[i++]
+          await loadSearchDoc(row).catch(() => {})
+        }
+      }
+      await Promise.all(Array.from({ length: 6 }, worker))
+    }
+  })().finally(() => {
+    warmPromise = null
+    scheduleSaveSearchCache()
+  })
+  return warmPromise
+}
+
+/** 从文本里挖一段命中上下文（压掉换行）。 */
+function snippetOf(text, needle, radius = 46) {
+  const i = text.toLowerCase().indexOf(needle)
+  if (i < 0) return ''
+  const from = Math.max(0, i - radius)
+  const to = Math.min(text.length, i + needle.length + radius)
+  return (from > 0 ? '…' : '') + text.slice(from, to).replace(/\s+/g, ' ').trim() + (to < text.length ? '…' : '')
+}
+
+export async function searchSessions({ q, agent = 'all', limit = 40, maxMs = 6000 }) {
+  const needle = String(q || '').trim().toLowerCase()
+  if (!needle) return { results: [], scanned: 0, total: 0, truncated: false, cached: searchCache.size }
+  const started = Date.now()
+  const agentIds = agent === 'all' ? Object.keys(adapters) : [agent]
+  let rows = []
+  for (const id of agentIds) {
+    const a = adapters[id]
+    if (!a) continue
+    if (!(await a.detect().catch(() => false))) continue
+    try { rows.push(...(await a.list())) } catch (e) { log('search list 失败', id, e?.message) }
+  }
+  rows.sort((x, y) => (y.updatedAt ?? 0) - (x.updatedAt ?? 0))
+
+  const results = []
+  let scanned = 0
+  let truncated = false
+
+  for (const row of rows) {
+    if (results.length >= limit) { truncated = true; break }
+    if (Date.now() - started > maxMs) { truncated = true; break }
+    let doc
+    try { doc = await loadSearchDoc(row) } catch { continue }
+    scanned++
+    if (!doc) continue
+    const hits = []
+    for (const t of doc.turns) {
+      const inUser = t.user && t.user.toLowerCase().includes(needle)
+      const inAnswer = t.answer && t.answer.toLowerCase().includes(needle)
+      if (!inUser && !inAnswer) continue
+      hits.push({
+        n: t.n,
+        which: inUser ? 'user' : 'answer',
+        snippet: snippetOf(inUser ? t.user : t.answer, needle),
+      })
+      if (hits.length >= 3) break
+    }
+    if (!hits.length) continue
+    results.push({
+      agent: doc.agent,
+      id: doc.id,
+      title: doc.title,
+      cwd: doc.cwd,
+      kind: doc.kind,
+      origin: doc.origin,
+      parentId: doc.parentId,
+      updatedAt: doc.updatedAt,
+      size: doc.size,
+      hits,
+    })
+  }
+  return { results, scanned, total: rows.length, truncated, cached: searchCache.size }
+}
+
+
 // ---------------------------------------------------------------- 导入
 
 function estimateTokens(turns) {
@@ -1034,6 +1186,20 @@ export function apply(ctx, config = {}) {
           return send(res, 200, { ok: true })
         }
 
+        if (req.method === 'GET' && path === '/search') {
+          const q = url.searchParams.get('q') || ''
+          const agent = url.searchParams.get('agent') || 'all'
+          const limit = Math.min(100, Number(url.searchParams.get('limit')) || 40)
+          const maxMs = Math.min(15000, Number(url.searchParams.get('ms')) || 6000)
+          const out = await searchSessions({ q, agent, limit, maxMs })
+          return send(res, 200, out)
+        }
+
+        if (req.method === 'GET' && path === '/search/warm') {
+          warmSearchIndex().catch(() => {})
+          return send(res, 200, { warming: true, cached: searchCache.size })
+        }
+
         if (req.method === 'GET' && path === '/debug/read') {
           const id = url.searchParams.get('id')
           if (!id) return send(res, 400, { error: 'id required' })
@@ -1154,6 +1320,12 @@ export function apply(ctx, config = {}) {
   }
   startAuto()
   autoRestartHook = startAuto
+  // 全文索引：先用磁盘缓存（重启后秒搜），再后台增量预热
+  loadSearchCacheFromDisk()
+    .then((n) => { if (n) log('search-cache 载入', n, '条') })
+    .catch(() => {})
+    .finally(() => setTimeout(() => { warmSearchIndex().catch(() => {}) }, 3000).unref?.())
+  
   ctx.effect(() => () => { if (autoTimer) clearInterval(autoTimer) }, 'foreign-sessions: auto timer')
 
   log('ready; adapters =', [...enabled].join(','), '; kimi home =', KIMI_HOME)

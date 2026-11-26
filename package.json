@@ -1,6 +1,6 @@
 {
   "name": "dsh-foreign-sessions",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "private": false,
   "description": "Discover sessions from other local agents (Kimi Code / Claude Code / Codex) inside DSH, and import them as native DSH sessions.",
   "license": "MIT",
@@ -62,5 +62,9 @@
   "homepage": "https://github.com/lovivi/dsh-foreign-sessions#readme",
   "bugs": {
     "url": "https://github.com/lovivi/dsh-foreign-sessions/issues"
+  },
+  "scripts": {
+    "check": "node --check index.js && node -e \"import('./index.js').then(()=>console.log('module ok'))\"",
+    "test": "node test_host.mjs 2 && node test_render.mjs"
   }
 }
